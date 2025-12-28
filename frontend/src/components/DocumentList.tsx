@@ -41,10 +41,11 @@ export default function DocumentList({ projectId }: { projectId: number }) {
     setUploading(true);
     const formData = new FormData();
     formData.append('file', file);
-    formData.append('project_id', projectId.toString());
+    // Optional description can be added here if needed
 
     try {
-      await api.post('/api/documents/upload', formData, {
+      // Use project-specific endpoint
+      await api.post(`/api/projects/${projectId}/documents/upload`, formData, {
         headers: {
           'Content-Type': 'multipart/form-data',
         },
@@ -73,6 +74,24 @@ export default function DocumentList({ projectId }: { projectId: number }) {
       link.remove();
     } catch (error) {
       toast.error('Failed to download document');
+    }
+  };
+
+  const handleView = async (documentId: number, filename: string, fileType: string) => {
+    try {
+      const response = await api.get(`/api/documents/${documentId}/download`, {
+        responseType: 'blob',
+      });
+      const blob = new Blob([response.data], { type: fileType });
+      const url = window.URL.createObjectURL(blob);
+      
+      // Open in new tab for viewing
+      const newWindow = window.open(url, '_blank');
+      if (!newWindow) {
+        toast.error('Please allow popups to view documents');
+      }
+    } catch (error) {
+      toast.error('Failed to view document');
     }
   };
 
@@ -141,14 +160,23 @@ export default function DocumentList({ projectId }: { projectId: number }) {
               </div>
               <div className="flex items-center gap-2">
                 <button
+                  onClick={() => handleView(doc.id, doc.original_filename, doc.file_type)}
+                  className="p-2 text-primary-600 hover:bg-primary-50 rounded-lg transition-colors"
+                  title="View document"
+                >
+                  <FileText size={20} />
+                </button>
+                <button
                   onClick={() => handleDownload(doc.id, doc.original_filename)}
                   className="p-2 text-primary-600 hover:bg-primary-50 rounded-lg transition-colors"
+                  title="Download document"
                 >
                   <Download size={20} />
                 </button>
                 <button
                   onClick={() => handleDelete(doc.id)}
                   className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                  title="Delete document"
                 >
                   <Trash2 size={20} />
                 </button>

@@ -229,6 +229,7 @@ class Meeting(Base):
     end_time = Column(DateTime(timezone=True), nullable=False)
     location = Column(String(255), nullable=True)  # Physical or virtual location
     meeting_type = Column(String(20), default="virtual")  # virtual, in_person, hybrid
+    meeting_room_url = Column(String(500), nullable=True)  # Video call room URL (e.g., Zoom, Google Meet, custom WebRTC)
     created_by_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 

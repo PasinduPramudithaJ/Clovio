@@ -1,15 +1,22 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
 from sqlalchemy.orm import Session
-from typing import List
+from typing import List, Optional
 from database import get_db
-from models import Project, ProjectMember, Task, Document, ChatMessage, User
+from models import Project, ProjectMember, Task, Document, ChatMessage, User, Assessment, Meeting, MeetingParticipant, Contribution
 from schemas import (
-    ProjectCreate, ProjectResponse, ProjectDetail, TaskResponse
+    ProjectCreate, ProjectResponse, ProjectDetail, TaskResponse,
+    DocumentResponse, AssessmentCreate, AssessmentResponse,
+    MeetingCreate, MeetingResponse, MeetingDetail,
+    ContributionCreate, ContributionResponse
 )
 from auth import get_current_active_user, require_professor
 from ai.task_breakdown import break_down_project
 from ai.task_assignment import assign_tasks_intelligently
 from datetime import datetime
+import os
+import uuid
+from pathlib import Path
+import aiofiles
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
 
@@ -60,7 +67,10 @@ async def create_project(
     # Automatically break down project into tasks based on description
     try:
         deadline_str = project.deadline.isoformat() if isinstance(project.deadline, datetime) else str(project.deadline)
+        print(f"[AI Breakdown] Analyzing project description to create tasks for project: {project.title}")
+        print(f"[AI Breakdown] Project description length: {len(project.description)} characters")
         task_data_list = await break_down_project(project.description, deadline_str)
+        print(f"[AI Breakdown] Generated {len(task_data_list)} tasks from project description")
         
         created_tasks = []
         for task_data in task_data_list:
@@ -194,18 +204,61 @@ async def get_project(
         tasks = []  # Empty list if not enrolled
     
     # Get document count
-    doc_count = db.query(Document).filter(Document.project_id == project_id).count()
+    try:
+        doc_count = db.query(Document).filter(Document.project_id == project_id).count()
+    except Exception:
+        doc_count = 0
     
     # Get message count
-    msg_count = db.query(ChatMessage).filter(ChatMessage.project_id == project_id).count()
+    try:
+        msg_count = db.query(ChatMessage).filter(ChatMessage.project_id == project_id).count()
+    except Exception:
+        msg_count = 0
     
-    return {
-        **project.__dict__,
+    # Get assessment count
+    try:
+        assessment_count = db.query(Assessment).filter(Assessment.project_id == project_id).count()
+    except Exception:
+        assessment_count = 0
+    
+    # Get meeting count
+    try:
+        meeting_count = db.query(Meeting).filter(Meeting.project_id == project_id).count()
+    except Exception as e:
+        # If meeting_room_url column doesn't exist, try to handle gracefully
+        print(f"Warning: Could not get meeting count: {e}")
+        meeting_count = 0
+    
+    # Get contribution count
+    try:
+        contribution_count = db.query(Contribution).filter(Contribution.project_id == project_id).count()
+    except Exception:
+        contribution_count = 0
+    
+    # Build response with all required fields
+    # Handle None values properly for optional fields
+    response_data = {
+        "id": project.id,
+        "title": project.title,
+        "description": project.description,
+        "course_code": project.course_code if project.course_code else None,
+        "course_name": project.course_name if project.course_name else None,
+        "deadline": project.deadline,
+        "created_by_id": project.created_by_id,
+        "status": project.status if project.status else "active",
+        "ai_assigned": project.ai_assigned if project.ai_assigned is not None else False,
+        "created_at": project.created_at,
+        "updated_at": project.updated_at if project.updated_at else None,
         "members": member_data,
         "tasks": tasks,
         "document_count": doc_count,
-        "message_count": msg_count
+        "message_count": msg_count,
+        "assessment_count": assessment_count,
+        "meeting_count": meeting_count,
+        "contribution_count": contribution_count
     }
+    
+    return response_data
 
 
 @router.post("/{project_id}/breakdown", response_model=List[TaskResponse])
@@ -228,9 +281,12 @@ async def breakdown_project(
         if not member or member.role != "leader":
             raise HTTPException(status_code=403, detail="Only project leaders can break down projects")
     
-    # Use AI to break down project
+    # Use AI to break down project based on description
     deadline_str = project.deadline.isoformat() if isinstance(project.deadline, datetime) else str(project.deadline)
+    print(f"[AI Breakdown] Manual breakdown requested for project: {project.title}")
+    print(f"[AI Breakdown] Analyzing project description: {project.description[:100]}...")
     task_data_list = await break_down_project(project.description, deadline_str)
+    print(f"[AI Breakdown] Generated {len(task_data_list)} tasks from project description")
     
     created_tasks = []
     for task_data in task_data_list:
@@ -380,6 +436,376 @@ async def remove_project_member(
     db.commit()
     
     return None
+
+
+@router.post("/{project_id}/documents/upload", response_model=DocumentResponse, status_code=status.HTTP_201_CREATED)
+async def upload_project_document(
+    project_id: int,
+    file: UploadFile = File(...),
+    description: Optional[str] = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    """Upload a document to a project."""
+    # Verify project exists
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    # Check authorization
+    if current_user.role.value not in ["professor", "admin"]:
+        member = db.query(ProjectMember).filter(
+            ProjectMember.project_id == project_id,
+            ProjectMember.user_id == current_user.id
+        ).first()
+        if not member:
+            raise HTTPException(status_code=403, detail="Not authorized to upload documents to this project")
+    
+    # Create uploads directory if it doesn't exist
+    upload_dir = Path("uploads")
+    upload_dir.mkdir(exist_ok=True)
+    
+    # Generate unique filename
+    file_ext = Path(file.filename).suffix
+    unique_filename = f"{uuid.uuid4()}{file_ext}"
+    file_path = upload_dir / unique_filename
+    
+    # Save file
+    async with aiofiles.open(file_path, 'wb') as f:
+        content = await file.read()
+        await f.write(content)
+    
+    # Get file size
+    file_size = os.path.getsize(file_path)
+    
+    # Create document record
+    document = Document(
+        project_id=project_id,
+        uploaded_by_id=current_user.id,
+        filename=unique_filename,
+        original_filename=file.filename,
+        file_path=str(file_path),
+        file_size=file_size,
+        file_type=file.content_type or "application/octet-stream",
+        description=description
+    )
+    
+    db.add(document)
+    db.commit()
+    db.refresh(document)
+    
+    return document
+
+
+@router.post("/{project_id}/assessments", response_model=AssessmentResponse, status_code=status.HTTP_201_CREATED)
+async def create_project_assessment(
+    project_id: int,
+    assessment_data: AssessmentCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    """Create an assessment for a project member."""
+    # Verify project exists
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    # Ensure the assessment is for this project
+    if assessment_data.project_id != project_id:
+        raise HTTPException(status_code=400, detail="Project ID mismatch")
+    
+    # Verify evaluated user is a project member
+    member = db.query(ProjectMember).filter(
+        ProjectMember.project_id == project_id,
+        ProjectMember.user_id == assessment_data.evaluated_user_id
+    ).first()
+    if not member:
+        raise HTTPException(status_code=400, detail="User is not a project member")
+    
+    # Check authorization based on evaluation type
+    if assessment_data.evaluation_type == "professor":
+        if current_user.role.value not in ["professor", "admin"]:
+            raise HTTPException(status_code=403, detail="Only professors can create professor assessments")
+    elif assessment_data.evaluation_type == "peer":
+        # Peers must be project members
+        evaluator_member = db.query(ProjectMember).filter(
+            ProjectMember.project_id == project_id,
+            ProjectMember.user_id == current_user.id
+        ).first()
+        if not evaluator_member:
+            raise HTTPException(status_code=403, detail="Must be a project member to create peer assessment")
+        if assessment_data.evaluated_user_id == current_user.id:
+            raise HTTPException(status_code=400, detail="Cannot create peer assessment for yourself")
+    elif assessment_data.evaluation_type == "self":
+        if assessment_data.evaluated_user_id != current_user.id:
+            raise HTTPException(status_code=403, detail="Can only create self-assessment for yourself")
+    
+    # Check if assessment already exists
+    existing = db.query(Assessment).filter(
+        Assessment.project_id == project_id,
+        Assessment.evaluated_user_id == assessment_data.evaluated_user_id,
+        Assessment.evaluator_id == current_user.id,
+        Assessment.evaluation_type == assessment_data.evaluation_type
+    ).first()
+    
+    if existing:
+        # Update existing assessment
+        existing.overall_score = assessment_data.overall_score
+        existing.technical_skills = assessment_data.technical_skills
+        existing.collaboration = assessment_data.collaboration
+        existing.communication = assessment_data.communication
+        existing.problem_solving = assessment_data.problem_solving
+        existing.comments = assessment_data.comments
+        existing.updated_at = datetime.utcnow()
+        db.commit()
+        db.refresh(existing)
+        assessment = existing
+    else:
+        # Create new assessment
+        assessment = Assessment(
+            project_id=project_id,
+            evaluated_user_id=assessment_data.evaluated_user_id,
+            evaluator_id=current_user.id,
+            evaluation_type=assessment_data.evaluation_type,
+            overall_score=assessment_data.overall_score,
+            technical_skills=assessment_data.technical_skills,
+            collaboration=assessment_data.collaboration,
+            communication=assessment_data.communication,
+            problem_solving=assessment_data.problem_solving,
+            comments=assessment_data.comments
+        )
+        db.add(assessment)
+        db.commit()
+        db.refresh(assessment)
+    
+    # Get user names for response
+    evaluated_user = db.query(User).filter(User.id == assessment.evaluated_user_id).first()
+    evaluator_user = db.query(User).filter(User.id == assessment.evaluator_id).first()
+    
+    return {
+        "id": assessment.id,
+        "project_id": assessment.project_id,
+        "evaluated_user_id": assessment.evaluated_user_id,
+        "evaluated_user_name": evaluated_user.full_name if evaluated_user else "Unknown",
+        "evaluator_id": assessment.evaluator_id,
+        "evaluator_name": evaluator_user.full_name if evaluator_user else "Unknown",
+        "evaluation_type": assessment.evaluation_type,
+        "overall_score": assessment.overall_score,
+        "technical_skills": assessment.technical_skills,
+        "collaboration": assessment.collaboration,
+        "communication": assessment.communication,
+        "problem_solving": assessment.problem_solving,
+        "comments": assessment.comments,
+        "created_at": assessment.created_at,
+        "updated_at": assessment.updated_at
+    }
+
+
+@router.post("/{project_id}/meetings", response_model=MeetingResponse, status_code=status.HTTP_201_CREATED)
+async def create_project_meeting(
+    project_id: int,
+    meeting_data: MeetingCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    """Create a meeting for a project."""
+    # Verify project exists
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    # Ensure the meeting is for this project
+    if meeting_data.project_id != project_id:
+        raise HTTPException(status_code=400, detail="Project ID mismatch")
+    
+    # Check authorization
+    if current_user.role.value not in ["professor", "admin"]:
+        member = db.query(ProjectMember).filter(
+            ProjectMember.project_id == project_id,
+            ProjectMember.user_id == current_user.id
+        ).first()
+        if not member:
+            raise HTTPException(status_code=403, detail="Not authorized to create meetings for this project")
+    
+    # Generate meeting room URL if virtual/hybrid and not provided
+    meeting_room_url = meeting_data.meeting_room_url
+    if not meeting_room_url and meeting_data.meeting_type in ["virtual", "hybrid"]:
+        # Generate a simple room URL (in production, integrate with video service API)
+        import uuid
+        room_id = str(uuid.uuid4())[:8]
+        meeting_room_url = f"/meeting/{room_id}"
+    
+    # Create meeting
+    meeting = Meeting(
+        project_id=project_id,
+        title=meeting_data.title,
+        description=meeting_data.description,
+        start_time=meeting_data.start_time,
+        end_time=meeting_data.end_time,
+        location=meeting_data.location,
+        meeting_type=meeting_data.meeting_type,
+        meeting_room_url=meeting_room_url,
+        created_by_id=current_user.id
+    )
+    db.add(meeting)
+    db.commit()
+    db.refresh(meeting)
+    
+    # Add participants
+    participant_ids = meeting_data.participant_ids if meeting_data.participant_ids else []
+    # If no participants specified, add all project members
+    if not participant_ids:
+        members = db.query(ProjectMember).filter(
+            ProjectMember.project_id == project_id
+        ).all()
+        participant_ids = [m.user_id for m in members]
+    
+    for user_id in participant_ids:
+        # Verify user is a project member
+        member = db.query(ProjectMember).filter(
+            ProjectMember.project_id == project_id,
+            ProjectMember.user_id == user_id
+        ).first()
+        if member:
+            participant = MeetingParticipant(
+                meeting_id=meeting.id,
+                user_id=user_id,
+                status="pending"
+            )
+            db.add(participant)
+    
+    db.commit()
+    
+    return meeting
+
+
+@router.get("/{project_id}/meetings", response_model=List[MeetingResponse])
+async def get_project_meetings(
+    project_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    """Get all meetings for a project."""
+    # Verify project exists
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    # Check authorization
+    if current_user.role.value not in ["professor", "admin"]:
+        member = db.query(ProjectMember).filter(
+            ProjectMember.project_id == project_id,
+            ProjectMember.user_id == current_user.id
+        ).first()
+        if not member:
+            raise HTTPException(status_code=403, detail="Not authorized")
+    
+    meetings = db.query(Meeting).filter(Meeting.project_id == project_id).order_by(Meeting.start_time.desc()).all()
+    return meetings
+
+
+@router.post("/{project_id}/contributions", response_model=ContributionResponse, status_code=status.HTTP_201_CREATED)
+async def create_project_contribution(
+    project_id: int,
+    contribution_data: ContributionCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    """Record a contribution to a project."""
+    # Verify project exists
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    # Ensure the contribution is for this project
+    if contribution_data.project_id != project_id:
+        raise HTTPException(status_code=400, detail="Project ID mismatch")
+    
+    # Check authorization - user must be a project member
+    if current_user.role.value not in ["professor", "admin"]:
+        member = db.query(ProjectMember).filter(
+            ProjectMember.project_id == project_id,
+            ProjectMember.user_id == current_user.id
+        ).first()
+        if not member:
+            raise HTTPException(status_code=403, detail="Not authorized to record contributions for this project")
+    
+    # Users can only record their own contributions
+    if contribution_data.user_id and contribution_data.user_id != current_user.id:
+        if current_user.role.value not in ["professor", "admin"]:
+            raise HTTPException(status_code=403, detail="Can only record your own contributions")
+    
+    contribution = Contribution(
+        project_id=project_id,
+        user_id=current_user.id,
+        task_id=contribution_data.task_id,
+        contribution_type=contribution_data.contribution_type,
+        description=contribution_data.description,
+        hours_spent=contribution_data.hours_spent
+    )
+    
+    db.add(contribution)
+    db.commit()
+    db.refresh(contribution)
+    
+    # Get user name for response
+    user = db.query(User).filter(User.id == current_user.id).first()
+    
+    return {
+        "id": contribution.id,
+        "project_id": contribution.project_id,
+        "user_id": contribution.user_id,
+        "user_name": user.full_name if user else "Unknown",
+        "task_id": contribution.task_id,
+        "contribution_type": contribution.contribution_type,
+        "description": contribution.description,
+        "hours_spent": contribution.hours_spent,
+        "created_at": contribution.created_at
+    }
+
+
+@router.get("/{project_id}/contributions", response_model=List[ContributionResponse])
+async def get_project_contributions(
+    project_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    """Get all contributions for a project."""
+    # Verify project exists
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    # Check authorization
+    if current_user.role.value not in ["professor", "admin"]:
+        member = db.query(ProjectMember).filter(
+            ProjectMember.project_id == project_id,
+            ProjectMember.user_id == current_user.id
+        ).first()
+        if not member:
+            raise HTTPException(status_code=403, detail="Not authorized")
+    
+    contributions = db.query(Contribution).filter(
+        Contribution.project_id == project_id
+    ).order_by(Contribution.created_at.desc()).all()
+    
+    # Get user names
+    result = []
+    for contrib in contributions:
+        user = db.query(User).filter(User.id == contrib.user_id).first()
+        result.append({
+            "id": contrib.id,
+            "project_id": contrib.project_id,
+            "user_id": contrib.user_id,
+            "user_name": user.full_name if user else "Unknown",
+            "task_id": contrib.task_id,
+            "contribution_type": contrib.contribution_type,
+            "description": contrib.description,
+            "hours_spent": contrib.hours_spent,
+            "created_at": contrib.created_at
+        })
+    
+    return result
 
 
 @router.delete("/{project_id}", status_code=status.HTTP_204_NO_CONTENT)

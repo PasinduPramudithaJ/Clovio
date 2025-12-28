@@ -104,6 +104,9 @@ class ProjectDetail(ProjectResponse):
     tasks: List["TaskResponse"]
     document_count: int
     message_count: int
+    assessment_count: int
+    meeting_count: int
+    contribution_count: int
 
 
 # Task Schemas
@@ -292,6 +295,7 @@ class MeetingBase(BaseModel):
     end_time: datetime
     location: Optional[str] = None
     meeting_type: str = "virtual"  # virtual, in_person, hybrid
+    meeting_room_url: Optional[str] = None  # Video call room URL
 
 
 class MeetingCreate(MeetingBase):

@@ -107,6 +107,14 @@ async def create_meeting(
         if not member:
             raise HTTPException(status_code=403, detail="Not authorized")
     
+    # Generate meeting room URL if virtual/hybrid and not provided
+    meeting_room_url = meeting_data.meeting_room_url
+    if not meeting_room_url and meeting_data.meeting_type in ["virtual", "hybrid"]:
+        # Generate a simple room URL (in production, integrate with video service API)
+        import uuid
+        room_id = str(uuid.uuid4())[:8]
+        meeting_room_url = f"/meeting/{room_id}"
+    
     # Create meeting
     meeting = Meeting(
         project_id=meeting_data.project_id,
@@ -116,6 +124,7 @@ async def create_meeting(
         end_time=meeting_data.end_time,
         location=meeting_data.location,
         meeting_type=meeting_data.meeting_type,
+        meeting_room_url=meeting_room_url,
         created_by_id=current_user.id
     )
     db.add(meeting)

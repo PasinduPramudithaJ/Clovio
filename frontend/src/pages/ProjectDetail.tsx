@@ -19,6 +19,9 @@ import { useAuthStore } from '@/store/authStore';
 import toast from 'react-hot-toast';
 import ProjectChat from '@/components/ProjectChat';
 import DocumentList from '@/components/DocumentList';
+import AssessmentList from '@/components/AssessmentList';
+import MeetingList from '@/components/MeetingList';
+import ContributionList from '@/components/ContributionList';
 import WorkloadDistribution from '@/components/WorkloadDistribution';
 
 interface Project {
@@ -33,6 +36,9 @@ interface Project {
   tasks: Task[];
   document_count: number;
   message_count: number;
+  assessment_count: number;
+  meeting_count: number;
+  contribution_count: number;
 }
 
 interface Task {
@@ -80,17 +86,30 @@ export default function ProjectDetail() {
   const fetchProject = async () => {
     try {
       const response = await api.get(`/api/projects/${id}`);
-      setProject(response.data);
+      // Ensure all required fields have default values
+      const projectData = {
+        ...response.data,
+        meeting_count: response.data.meeting_count || 0,
+        contribution_count: response.data.contribution_count || 0,
+        assessment_count: response.data.assessment_count || 0,
+        document_count: response.data.document_count || 0,
+        message_count: response.data.message_count || 0,
+      };
+      setProject(projectData);
       
       // Check if user is enrolled - if not, show message
-      const isEnrolled = response.data.members?.some((m: any) => m.id === user?.id);
+      const isEnrolled = projectData.members?.some((m: any) => m.id === user?.id);
       if (!isEnrolled && !isProfessor) {
         // User can see project but tasks will be empty
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to fetch project:', error);
-      toast.error('Failed to load project');
-      navigate('/projects');
+      const errorMessage = error.response?.data?.detail || error.message || 'Failed to load project';
+      toast.error(errorMessage);
+      // Only navigate if it's a 404 or 403 error
+      if (error.response?.status === 404 || error.response?.status === 403) {
+        navigate('/projects');
+      }
     } finally {
       setLoading(false);
     }
@@ -328,9 +347,9 @@ export default function ProjectDetail() {
             { id: 'tasks', label: 'Tasks', count: project.tasks.length },
             { id: 'chat', label: 'Chat', count: project.message_count },
             { id: 'documents', label: 'Documents', count: project.document_count },
-            { id: 'schedule', label: 'Schedule', count: 0 },
-            { id: 'contributions', label: 'Contributions', count: 0 },
-            { id: 'assessments', label: 'Assessments', count: 0 },
+            { id: 'schedule', label: 'Schedule', count: project.meeting_count || 0 },
+            { id: 'contributions', label: 'Contributions', count: project.contribution_count || 0 },
+            { id: 'assessments', label: 'Assessments', count: project.assessment_count || 0 },
           ].map((tab) => (
             <button
               key={tab.id}
@@ -495,50 +514,11 @@ export default function ProjectDetail() {
       {activeTab === 'chat' && <ProjectChat projectId={parseInt(id!)} />}
       {activeTab === 'documents' && <DocumentList projectId={parseInt(id!)} />}
       
-      {activeTab === 'schedule' && (
-        <div className="space-y-4">
-          <div className="flex justify-between items-center">
-            <h2 className="text-xl font-bold text-gray-900">Schedule & Meetings</h2>
-            <button className="btn-primary flex items-center gap-2">
-              <Calendar size={20} />
-              New Meeting
-            </button>
-          </div>
-          <div className="card text-center py-12">
-            <p className="text-gray-600">Schedule and meeting management coming soon</p>
-          </div>
-        </div>
-      )}
+      {activeTab === 'schedule' && <MeetingList projectId={parseInt(id!)} />}
       
-      {activeTab === 'contributions' && (
-        <div className="space-y-4">
-          <div className="flex justify-between items-center">
-            <h2 className="text-xl font-bold text-gray-900">Contributions</h2>
-            <button className="btn-primary flex items-center gap-2">
-              <Plus size={20} />
-              Record Contribution
-            </button>
-          </div>
-          <div className="card text-center py-12">
-            <p className="text-gray-600">Contribution tracking coming soon</p>
-          </div>
-        </div>
-      )}
+      {activeTab === 'contributions' && <ContributionList projectId={parseInt(id!)} />}
       
-      {activeTab === 'assessments' && (
-        <div className="space-y-4">
-          <div className="flex justify-between items-center">
-            <h2 className="text-xl font-bold text-gray-900">Assessments</h2>
-            <button className="btn-primary flex items-center gap-2">
-              <Plus size={20} />
-              New Assessment
-            </button>
-          </div>
-          <div className="card text-center py-12">
-            <p className="text-gray-600">Assessment and grading system coming soon</p>
-          </div>
-        </div>
-      )}
+      {activeTab === 'assessments' && <AssessmentList projectId={parseInt(id!)} />}
       
       {/* Workload Distribution - Show in analytics or separate section */}
       {activeTab === 'tasks' && project.tasks.length > 0 && (

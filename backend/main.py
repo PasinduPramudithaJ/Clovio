@@ -17,6 +17,37 @@ load_dotenv()
 try:
     Base.metadata.create_all(bind=engine)
     print("[OK] Database tables initialized")
+    
+    # Check and fix schema for new columns (like meeting_room_url)
+    try:
+        from sqlalchemy import inspect, text
+        inspector = inspect(engine)
+        if 'meetings' in inspector.get_table_names():
+            columns = [col['name'] for col in inspector.get_columns('meetings')]
+            if 'meeting_room_url' not in columns:
+                print("[INFO] Adding meeting_room_url column to meetings table...")
+                with engine.connect() as conn:
+                    # Try PostgreSQL syntax first (IF NOT EXISTS)
+                    try:
+                        conn.execute(text("ALTER TABLE meetings ADD COLUMN IF NOT EXISTS meeting_room_url VARCHAR(500)"))
+                        conn.commit()
+                        print("[OK] meeting_room_url column added (PostgreSQL)")
+                    except Exception:
+                        # Fallback to standard SQL (for SQLite and others)
+                        try:
+                            conn.execute(text("ALTER TABLE meetings ADD COLUMN meeting_room_url VARCHAR(500)"))
+                            conn.commit()
+                            print("[OK] meeting_room_url column added (SQLite/Standard)")
+                        except Exception as e2:
+                            # Column might already exist or other error
+                            if 'duplicate' in str(e2).lower() or 'already exists' in str(e2).lower():
+                                print("[INFO] meeting_room_url column already exists")
+                            else:
+                                raise
+    except Exception as e:
+        print(f"[WARNING] Could not check/update schema: {e}")
+        print("[INFO] Schema check skipped - tables will be created/updated on next migration")
+        
 except Exception as e:
     print(f"[ERROR] Failed to create database tables: {e}")
     print("[INFO] Please check your database connection and try again")
