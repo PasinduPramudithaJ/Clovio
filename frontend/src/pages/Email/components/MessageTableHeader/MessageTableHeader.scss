@@ -1,0 +1,15 @@
+.messageTableHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+
+  & .form-control {
+    width: auto;
+  }
+
+  .dropdown.b-dropdown {
+    button::after {
+      margin-left: 16px;
+    }
+  }
+}

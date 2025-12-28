@@ -1,0 +1,13 @@
+@import '../../../styles/app';
+
+.tables-basic {
+  .table th {
+    font-size: $font-size-sm;
+  }
+  .abc-checkbox {
+    label::before {
+      background-color: transparent;
+      border: 1px solid #c1ccd3;
+    }
+  }
+}
