@@ -22,7 +22,9 @@ export default function Projects() {
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [showCreateModal, setShowCreateModal] = useState(false);
-  const isProfessor = user?.role === 'professor' || user?.role === 'admin';
+  const isProfessor = user?.role === 'professor';
+  const isAdmin = user?.role === 'admin';
+  const isStudent = user?.role === 'student';
   const [newProject, setNewProject] = useState({
     title: '',
     description: '',
@@ -67,8 +69,9 @@ export default function Projects() {
   const handleCreateProject = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
+      toast.loading('Creating project and generating tasks...', { id: 'create-project' });
       await api.post('/api/projects/', newProject);
-      toast.success('Project created successfully!');
+      toast.success('Project created successfully! Tasks have been automatically generated and assigned based on team member skills.', { id: 'create-project' });
       setShowCreateModal(false);
       setNewProject({
         title: '',
@@ -79,7 +82,7 @@ export default function Projects() {
       });
       fetchProjects();
     } catch (error: any) {
-      toast.error(error.response?.data?.detail || 'Failed to create project');
+      toast.error(error.response?.data?.detail || 'Failed to create project', { id: 'create-project' });
     }
   };
 
@@ -148,9 +151,18 @@ export default function Projects() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold text-gray-900">Projects</h1>
-          <p className="text-gray-600 mt-2">Manage your academic projects</p>
+          <p className="text-gray-600 mt-2">
+            {isProfessor 
+              ? 'View project progress and analytics' 
+              : 'Manage your academic projects'}
+          </p>
+          {isProfessor && (
+            <p className="text-sm text-blue-600 mt-1">
+              Note: Professors can view project progress but cannot create or delete projects.
+            </p>
+          )}
         </div>
-        {isProfessor && (
+        {isStudent && (
           <button
             onClick={() => setShowCreateModal(true)}
             className="btn-primary flex items-center gap-2"
@@ -226,7 +238,7 @@ export default function Projects() {
                       </button>
                     )
                   )}
-                  {isProfessor && (
+                  {isAdmin && (
                     <button
                       onClick={(e) => handleDeleteProject(project.id, e)}
                       className="btn-secondary flex items-center gap-1 text-xs px-3 py-1 bg-red-50 text-red-600 hover:bg-red-100"

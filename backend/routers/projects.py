@@ -8,6 +8,7 @@ from schemas import (
 )
 from auth import get_current_active_user, require_professor
 from ai.task_breakdown import break_down_project
+from ai.task_assignment import assign_tasks_intelligently
 from datetime import datetime
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
@@ -19,7 +20,14 @@ async def create_project(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user)
 ):
-    """Create a new project."""
+    """Create a new project. Only students can create projects."""
+    # Only students can create projects
+    if current_user.role.value == "professor":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Professors cannot create projects. Only students can create projects."
+        )
+    
     project = Project(
         title=project_data.title,
         description=project_data.description,
@@ -48,6 +56,59 @@ async def create_project(
             db.add(member)
     
     db.commit()
+    
+    # Automatically break down project into tasks based on description
+    try:
+        deadline_str = project.deadline.isoformat() if isinstance(project.deadline, datetime) else str(project.deadline)
+        task_data_list = await break_down_project(project.description, deadline_str)
+        
+        created_tasks = []
+        for task_data in task_data_list:
+            task = Task(
+                project_id=project.id,
+                title=task_data.get("title", "Untitled Task"),
+                description=task_data.get("description", ""),
+                priority=task_data.get("priority", "medium"),
+                required_skills=task_data.get("required_skills", []),
+                estimated_hours=task_data.get("estimated_hours")
+            )
+            db.add(task)
+            created_tasks.append(task)
+        
+        project.ai_assigned = True
+        db.commit()
+        
+        # Refresh tasks to get their IDs
+        for task in created_tasks:
+            db.refresh(task)
+        
+        # Automatically assign tasks to enrolled members based on their skills
+        if created_tasks:
+            # Get all enrolled member IDs from the database (including creator and any added members)
+            members = db.query(ProjectMember).filter(ProjectMember.project_id == project.id).all()
+            
+            # Only assign if there are members enrolled (there should always be at least the creator)
+            if len(members) > 0:
+                task_ids = [task.id for task in created_tasks]
+                try:
+                    assignments = await assign_tasks_intelligently(db, project.id, task_ids)
+                    
+                    # Apply assignments
+                    for assignment in assignments:
+                        task = db.query(Task).filter(Task.id == assignment["task_id"]).first()
+                        if task:
+                            task.assigned_to_id = assignment["assigned_to_id"]
+                    
+                    db.commit()
+                except Exception as e:
+                    # If assignment fails, tasks remain unassigned (can be assigned manually later)
+                    print(f"Warning: Could not auto-assign tasks: {e}")
+    
+    except Exception as e:
+        # If task breakdown fails, project is still created but without tasks
+        # Tasks can be created manually later using the breakdown endpoint
+        print(f"Warning: Could not auto-create tasks from project description: {e}")
+        # Project is already committed, so we don't need to rollback or re-commit
     
     return project
 
@@ -104,9 +165,27 @@ async def get_project(
     else:
         is_enrolled = True  # Professors can see all tasks
     
-    # Get members
+    # Get members with their roles
     members = db.query(ProjectMember).filter(ProjectMember.project_id == project_id).all()
-    member_users = [db.query(User).filter(User.id == m.user_id).first() for m in members]
+    member_data = []
+    for member in members:
+        user = db.query(User).filter(User.id == member.user_id).first()
+        if user:
+            # Create member dict with user data and project member role
+            member_dict = {
+                "id": user.id,
+                "email": user.email,
+                "full_name": user.full_name,
+                "role": user.role.value,  # User role (student/professor/admin)
+                "student_id": user.student_id,
+                "department": user.department,
+                "year_level": user.year_level,
+                "is_active": user.is_active,
+                "is_verified": user.is_verified,
+                "created_at": user.created_at,
+                "member_role": member.role  # Project member role (leader or member)
+            }
+            member_data.append(member_dict)
     
     # Get tasks - only show if user is enrolled (or is professor)
     if is_enrolled:
@@ -122,7 +201,7 @@ async def get_project(
     
     return {
         **project.__dict__,
-        "members": member_users,
+        "members": member_data,
         "tasks": tasks,
         "document_count": doc_count,
         "message_count": msg_count
@@ -309,14 +388,23 @@ async def delete_project(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user)
 ):
-    """Delete a project. Only professors can delete projects. All related tasks will be deleted."""
+    """Delete a project. Only admins can delete projects. Professors cannot delete projects."""
     project = db.query(Project).filter(Project.id == project_id).first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
     
-    # Check authorization - only professors can delete projects
-    if current_user.role.value not in ["professor", "admin"]:
-        raise HTTPException(status_code=403, detail="Only professors can delete projects")
+    # Check authorization - only admins can delete projects (not professors)
+    if current_user.role.value != "admin":
+        if current_user.role.value == "professor":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Professors cannot delete projects. Only admins can delete projects."
+            )
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only admins can delete projects"
+            )
     
     # Delete the project - cascade will automatically delete:
     # - All tasks (cascade="all, delete-orphan")

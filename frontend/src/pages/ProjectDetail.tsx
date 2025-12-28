@@ -13,6 +13,7 @@ import {
   AlertCircle,
   Timer,
   Trash2,
+  X,
 } from 'lucide-react';
 import { useAuthStore } from '@/store/authStore';
 import toast from 'react-hot-toast';
@@ -27,7 +28,8 @@ interface Project {
   deadline: string;
   course_code?: string;
   course_name?: string;
-  members: Array<{ id: number; full_name: string; email: string }>;
+  created_by_id?: number;
+  members: Array<{ id: number; full_name: string; email: string; role?: string; member_role?: string }>;
   tasks: Task[];
   document_count: number;
   message_count: number;
@@ -66,7 +68,8 @@ export default function ProjectDetail() {
     description: '',
   });
   const { user } = useAuthStore();
-  const isProfessor = user?.role === 'professor' || user?.role === 'admin';
+  const isProfessor = user?.role === 'professor';
+  const isAdmin = user?.role === 'admin';
 
   useEffect(() => {
     if (id) {
@@ -119,11 +122,12 @@ export default function ProjectDetail() {
 
   const handleBreakdown = async () => {
     try {
+      toast.loading('Breaking down project into tasks and assigning based on skills...', { id: 'breakdown' });
       await api.post(`/api/projects/${id}/breakdown`);
-      toast.success('Project broken down into tasks!');
+      toast.success('Project broken down into tasks! Tasks will be automatically assigned to team members based on their skills.', { id: 'breakdown' });
       fetchProject();
     } catch (error: any) {
-      toast.error(error.response?.data?.detail || 'Failed to break down project');
+      toast.error(error.response?.data?.detail || 'Failed to break down project', { id: 'breakdown' });
     }
   };
 
@@ -146,6 +150,26 @@ export default function ProjectDetail() {
       toast.error(error.response?.data?.detail || 'Failed to assign task');
     }
   };
+
+  const handleDeleteTask = async (taskId: number) => {
+    if (!confirm('Are you sure you want to delete this task? This action cannot be undone.')) return;
+    
+    try {
+      await api.delete(`/api/tasks/${taskId}`);
+      toast.success('Task deleted successfully!');
+      fetchProject();
+    } catch (error: any) {
+      toast.error(error.response?.data?.detail || 'Failed to delete task');
+    }
+  };
+
+  // Check if current user is project leader
+  const isProjectLeader = project?.members?.some(
+    (m: any) => m.id === user?.id && (m.member_role === 'leader' || m.role === 'leader')
+  ) || project?.created_by_id === user?.id;
+
+  // Check if user can delete tasks (professors/admins or project leaders)
+  const canDeleteTask = isProfessor || isAdmin || isProjectLeader;
 
   const handleLogTime = async (taskId: number) => {
     setSelectedTask(taskId);
@@ -222,10 +246,12 @@ export default function ProjectDetail() {
             )}
             <p className="text-gray-600 mt-2">{project.description}</p>
           </div>
-          <button onClick={handleBreakdown} className="btn-primary flex items-center gap-2">
-            <Bot size={20} />
-            AI Breakdown
-          </button>
+          {!isProfessor && project.members?.some((m: any) => m.id === user?.id) && (
+            <button onClick={handleBreakdown} className="btn-primary flex items-center gap-2">
+              <Bot size={20} />
+              AI Breakdown
+            </button>
+          )}
         </div>
 
         <div className="flex items-center justify-between mt-4">
@@ -273,7 +299,7 @@ export default function ProjectDetail() {
                 Enroll in Project
               </button>
             )}
-            {isProfessor && (
+            {isAdmin && (
               <button
                 onClick={async () => {
                   if (!confirm('Are you sure you want to delete this project? This will permanently delete all tasks, documents, chat messages, and other related data. This action cannot be undone.')) return;
@@ -339,8 +365,12 @@ export default function ProjectDetail() {
             <div className="card text-center py-12">
               {project.members?.some((m: any) => m.id === user?.id) || isProfessor ? (
                 <>
-                  <p className="text-gray-600 mb-4">No tasks yet</p>
-                  {isProfessor && (
+                  <p className="text-gray-600 mb-4">
+                    {isProfessor 
+                      ? 'No tasks yet. Tasks are automatically created when students create projects.' 
+                      : 'No tasks yet'}
+                  </p>
+                  {!isProfessor && project.members?.some((m: any) => m.id === user?.id) && (
                     <button onClick={handleBreakdown} className="btn-primary">
                       Use AI to break down project
                     </button>
@@ -427,6 +457,16 @@ export default function ProjectDetail() {
                         <option value="review">Review</option>
                         <option value="completed">Completed</option>
                       </select>
+                      {canDeleteTask && (
+                        <button
+                          onClick={() => handleDeleteTask(task.id)}
+                          className="px-3 py-1 text-xs text-red-600 hover:bg-red-50 rounded-lg border border-red-200 hover:border-red-300 flex items-center justify-center gap-1 transition-colors"
+                          title="Delete task"
+                        >
+                          <X size={14} />
+                          Delete
+                        </button>
+                      )}
                     </div>
                   </div>
                   {timeLogs[task.id] && timeLogs[task.id].length > 0 && (

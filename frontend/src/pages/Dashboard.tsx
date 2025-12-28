@@ -24,6 +24,7 @@ export default function Dashboard() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
+  const isStudent = user?.role === 'student';
 
   useEffect(() => {
     fetchData();
@@ -122,9 +123,11 @@ export default function Dashboard() {
           <div className="text-center py-12">
             <FolderKanban className="mx-auto text-gray-400" size={48} />
             <p className="text-gray-600 mt-4">No projects yet</p>
-            <Link to="/projects" className="btn-primary mt-4 inline-block">
-              Create Project
-            </Link>
+            {isStudent && (
+              <Link to="/projects" className="btn-primary mt-4 inline-block">
+                Create Project
+              </Link>
+            )}
           </div>
         ) : (
           <div className="space-y-4">
