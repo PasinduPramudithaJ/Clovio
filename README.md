@@ -60,3 +60,10 @@ This will automatically:
 ```bash
 git clone <repository-url>
 cd Clovio
+cd backend
+python main.py
+pip install -r requirements.txt
+cd frontend
+npm install
+npm run dev
+
