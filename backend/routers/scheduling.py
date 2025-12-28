@@ -110,10 +110,10 @@ async def create_meeting(
     # Generate meeting room URL if virtual/hybrid and not provided
     meeting_room_url = meeting_data.meeting_room_url
     if not meeting_room_url and meeting_data.meeting_type in ["virtual", "hybrid"]:
-        # Generate a simple room URL (in production, integrate with video service API)
+        # Generate a unique room ID for WebRTC
         import uuid
-        room_id = str(uuid.uuid4())[:8]
-        meeting_room_url = f"/meeting/{room_id}"
+        room_id = f"meeting_{meeting_data.project_id}_{uuid.uuid4().hex[:12]}"
+        meeting_room_url = room_id
     
     # Create meeting
     meeting = Meeting(

@@ -4,6 +4,7 @@ import { Plus, Video, Calendar, MapPin, Trash2, XCircle } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { format } from 'date-fns';
 import { useAuthStore } from '@/store/authStore';
+import VideoCall from './VideoCall';
 
 interface Meeting {
   id: number;
@@ -392,8 +393,9 @@ export default function MeetingList({ projectId }: { projectId: number }) {
 
       {/* Video Call Modal */}
       {showVideoCall && currentMeeting && (
-        <VideoCallModal
-          meeting={currentMeeting}
+        <VideoCall
+          meetingId={currentMeeting.id}
+          meetingTitle={currentMeeting.title}
           onClose={() => {
             setShowVideoCall(false);
             setCurrentMeeting(null);
@@ -404,62 +406,4 @@ export default function MeetingList({ projectId }: { projectId: number }) {
   );
 }
 
-// Simple Video Call Component (can be replaced with Daily.co, Twilio, or custom WebRTC)
-function VideoCallModal({ meeting, onClose }: { meeting: Meeting; onClose: () => void }) {
-  return (
-    <div className="fixed inset-0 bg-black bg-opacity-90 flex items-center justify-center z-50">
-      <div className="bg-white rounded-lg max-w-4xl w-full m-4">
-        <div className="p-6">
-          <div className="flex items-center justify-between mb-6">
-            <h2 className="text-2xl font-bold text-gray-900">{meeting.title}</h2>
-            <button
-              onClick={onClose}
-              className="p-2 text-gray-600 hover:bg-gray-100 rounded-lg"
-            >
-              <XCircle size={24} />
-            </button>
-          </div>
-          
-          <div className="bg-gray-900 rounded-lg p-8 text-center mb-4">
-            <Video className="mx-auto text-white mb-4" size={64} />
-            <p className="text-white text-lg mb-2">Video Call</p>
-            <p className="text-gray-400 text-sm mb-4">
-              {meeting.meeting_room_url || 'Meeting Room'}
-            </p>
-            <div className="space-y-2">
-              <p className="text-gray-300 text-sm">
-                To join this call, use the meeting room URL:
-              </p>
-              <p className="text-primary-400 font-mono text-sm break-all">
-                {meeting.meeting_room_url || '/meeting/room'}
-              </p>
-              <p className="text-gray-400 text-xs mt-4">
-                Note: For production, integrate with a video calling service like Daily.co, Twilio, or Zoom API
-              </p>
-            </div>
-          </div>
-
-          <div className="flex gap-4">
-            <button
-              onClick={() => {
-                if (meeting.meeting_room_url) {
-                  window.open(meeting.meeting_room_url, '_blank');
-                } else {
-                  toast.info('Meeting room URL not available');
-                }
-              }}
-              className="btn-primary flex-1 flex items-center justify-center gap-2"
-            >
-              <Video size={20} />
-              Open in New Tab
-            </button>
-            <button onClick={onClose} className="btn-secondary flex-1">
-              Close
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
 

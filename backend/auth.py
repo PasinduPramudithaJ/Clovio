@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta
 from typing import Optional
+from database import SessionLocal
 from jose import JWTError, jwt, ExpiredSignatureError
 from passlib.context import CryptContext
 from fastapi import Depends, HTTPException, status
@@ -213,3 +214,16 @@ async def require_admin(
         )
     return current_user
 
+
+async def get_current_active_user_ws(token: str, db: Session) -> Optional[User]:
+    """Get current user from WebSocket token (for WebSocket connections)."""
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user_id_str = payload.get("sub")
+        if user_id_str is None:
+            return None
+        user_id = int(user_id_str)
+        user = db.query(User).filter(User.id == user_id).first()
+        return user
+    except Exception:
+        return None

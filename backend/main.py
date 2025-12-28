@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 import traceback
 
 # Import routers
-from routers import auth, users, projects, tasks, documents, chat, analytics, scheduling, contributions, learning_analytics, assessments
+from routers import auth, users, projects, tasks, documents, chat, analytics, scheduling, contributions, learning_analytics, assessments, webrtc
 from models import User, UserRole
 from auth import get_password_hash
 
@@ -213,6 +213,7 @@ app.include_router(scheduling.router)
 app.include_router(contributions.router)
 app.include_router(learning_analytics.router)
 app.include_router(assessments.router)
+app.include_router(webrtc.router)
 
 
 @app.get("/")
